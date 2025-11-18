@@ -1,0 +1,520 @@
+---
+title: "Detecting and locating chess pieces using Convolutional Neural Networks (CNN) and YOLO5 with Ultralytics"
+output:
+  pdf_document: default
+  html_document: default
+date: "2025-11-17"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{python, eval=FALSE}
+!git clone https://github.com/ultralytics/yolov5  # Clone repository
+%cd yolov5
+!pip install -r requirements.txt  # Install dependencies
+```
+
+
+
+```{python, echo=FALSE,eval=FALSE, warnings=FALSE,results='hide'}
+from ultralytics import YOLO
+from google.colab import drive
+
+drive.mount('/content/drive')
+
+# Ein trainiertes Modell in der Version 11 und der Größe Nano (n) laden
+# und für Transfer-Learning verwenden
+model = YOLO("yolov5s.pt")
+
+
+
+# Das Modell mit den eigenen Bilder trainieren
+results = model.train(data="/content/drive/MyDrive/ChessPieces.yaml",
+                      epochs=10,
+                      imgsz = 256,
+                      batch = 3,
+                      save_json = True,
+                      lr0=0.01,
+                      augment=True                                     # Enable data augmentation
+)
+
+
+
+result = model.predict(r"/content/drive/MyDrive/ProjectData/images/val/whitecastle2.jpg",
+                       save=True,
+                       #imgsz = 512,
+                       imgsz = 256,
+                       #imgsz=128,
+                       conf=0.45,  # Schwellenwert 1 nur Obekte mit höchster Wahrscheinlichekit über diesem Wert behalten
+                       iou=0.5,  # Schwellenwert 2 Objekte die sich mit IOU größer diesem Wert überlappen entfernen
+                       )
+
+```
+
+
+
+
+## Introduction to some Computer Vision concepts
+
+**Ziel**: Schachfiguren auf einem Schachbrett erkennen
+
+- früher: vorgegebene Objekte einfach Bildern finden
+- man kann ein Bild/icons ausschneiden und dieses in einem anderen Bild finden
+
+**Nachteil**
+- dieses Bild musste dem Image in einem anderen Bild sehr ähnlich sein (hing u.a. an einem vorgegebenen _similarity threshold_ ab)
+
+
+```{python, echo=FALSE,eval=FALSE,warnings=FALSE,results='hide'}
+import cv2 as cv
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Load the image using OpenCV
+# Change the path to your image
+
+whiteking = cv.imread("images/train/whiteking3.jpg")
+whiteking1 = whiteking.copy()
+
+
+whiteking_cut = cv.imread("images/whiteking3_cut.jpg")
+
+# Convert the image from BGR to RGB
+cut_rgb = cv.cvtColor(whiteking_cut, cv.COLOR_BGR2RGB)
+
+# Display the image using Matplotlib
+plt.imshow(cut_rgb)
+plt.axis('off')  # Hide axes
+plt.show()
+```
+
+
+```{python, echo=FALSE, warnings=FALSE,results='hide'}
+
+
+import cv2 as cv
+import matplotlib.pyplot as plt
+import numpy as np
+
+whiteking = cv.imread("images/train/whiteking3.jpg")
+
+whiteking1 = whiteking.copy()
+
+# Convert the image from BGR to RGB
+whiteking_rgb = cv.cvtColor(whiteking, cv.COLOR_BGR2RGB)
+
+whiteking_cut = cv.imread("whiteking3_cut.jpg")
+
+# Convert the image from BGR to RGB
+cut_rgb = cv.cvtColor(whiteking_cut, cv.COLOR_BGR2RGB)
+
+fig, axes = plt.subplots(1, 2, figsize=(8, 4))
+axes[0].imshow(whiteking_rgb)
+axes[0].axis('off')
+axes[0].set_title('Picture with White King')
+axes[1].imshow(cut_rgb)
+axes[1].axis('off')
+axes[1].set_title('Cut Image White King')
+plt.tight_layout()
+plt.show()
+```
+
+
+
+```{python, warnings=FALSE, results='hide'}
+kingscr = cv.matchTemplate(whiteking, cut_rgb ,cv.TM_CCOEFF_NORMED)
+threshold = 0.7
+locback = np.where(kingscr >= threshold)
+locback = np.array(locback)
+
+
+# Draw a rectangle around the detected object
+color = (0, 255, 0)  # Green color in BGR
+thickness = 2  # Thickness of the rectangle border
+cv.rectangle(whiteking, (locback[1][0], locback[0][0]), (locback[1][0] + 109, locback[0][0] + 303), color, thickness)
+
+
+# Convert from BGR to RGB with openCV
+img_rgb = cv.cvtColor(whiteking, cv.COLOR_BGR2RGB)
+
+# Display the image
+plt.imshow(img_rgb)
+plt.axis('off')  # Hide axes
+plt.show()
+```
+
+
+```{python, warnings=FALSE, results='hide'}
+# Convert to grayscale
+gray = cv.cvtColor(whiteking1, cv.COLOR_BGR2GRAY)
+
+# Apply Gaussian Blur to reduce noise
+blurred = cv.GaussianBlur(gray, (5, 5), 0)
+
+# Perform edge detection (Canny)
+edges = cv.Canny(blurred, 50, 150)
+
+# Find contours
+contours, hierarchy = cv.findContours(edges, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
+
+whiteking1 = cv.cvtColor(whiteking1, cv.COLOR_BGR2RGB)
+# Draw all contours on the original image
+output = whiteking1.copy()
+
+# Display the image
+plt.imshow(cv.drawContours(output, contours, -1, (0, 255, 0), 2))
+plt.axis('off')  # Hide axes
+plt.show()
+
+```
+
+Simple **Algorithmen** zur Objekterkennung - Lernen nicht
+- vorgegebene Objekte erkennen (müssen sehr ähnlich sein)
+- Erkennen, dass Objekte auf dem Bild sind
+- $$\rightarrow$$ Einschränkungen bei der Erkennung und Identifizierung von Objekttypen
+1. CNN: hier verschiedene Schachfiguren kategorisieren
+2. YOLO5, Ultralytics: mehrere verschiedene Schachfiguren auf einem Schachbrett finden und kategorisieren
+
+## CNN: Convolutional Networks
+
+- Bilder kategorisieren
+- ähnliche Bilder von einem bestimmten Objekttyp (Katze, Hund, Alpaka) in einem Foto identifizieren
+
+## Datenvorbereitung
+
+Für den Daten Satz für die CNN Kategorisierung Bilder einzelner Schachfiguren aufgenommen:
+- in das Format 512x512 skaliert
+- 12 Kategorien - für jede Schachfigur
+
+```{python, echo=FALSE, results='hide', warnings=FALSE}
+chess_pieces = cv.imread("chess_pieces.png")
+
+# Convert the image from BGR to RGB
+img_rgb = cv.cvtColor(chess_pieces, cv.COLOR_BGR2RGB)
+
+# Display the image using Matplotlib
+plt.imshow(img_rgb)
+plt.axis('off') 
+plt.show()
+```
+
+- Funktion die alle Bilder in einem np.array zusammenführt und als Variable x zurückgibt
+- y sind jeweiligen Ziellabels zu den jeweiligen Bildern
+
+```{python,warnings=FALSE, eval=FALSE, results='hide'}
+
+import os
+import numpy as np
+from PIL import Image
+
+# Function to load images into a NumPy list
+def load_images(image_folder):
+    images = []
+
+    for filename in os.listdir(image_folder):
+        if filename.endswith(('.jpg')):
+            image_path = os.path.join(image_folder, filename)
+            
+            # Open image and convert to NumPy array
+            img = Image.open(image_path)
+            img_array = np.array(img)
+            
+            # Append the image array to the list
+            images.append(img_array)
+    
+    return images
+images = load_images("pics")
+images = np.array(images)
+x = images
+y = np.loadtxt("y.txt")
+```
+
+Diese werden weiter für das CNN vorbereitet:
+
+```{python, warnings=FALSE, eval=FALSE, results='hide'}
+
+import tensorflow as tf
+import numpy as np
+import matplotlib.pyplot as plt
+from tensorflow.keras.preprocessing.image import load_img
+from tensorflow.keras.preprocessing.image import img_to_array
+
+from sklearn.preprocessing import LabelBinarizer
+from tensorflow import keras
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+from tensorflow.keras import layers, models
+from tensorflow.keras.utils import to_categorical
+import io
+import time
+import os
+
+
+
+# Durchführen eines Train Test Splits
+X_train, X_test, y_train,y_test = train_test_split(x, y, test_size=0.2, random_state=42)
+
+# y-train werden one-hot encoded, da 12 Klassen kategorisiert werden sollen
+lb = LabelBinarizer()
+y_train = lb.fit_transform(y_train)
+y_test = lb.transform(y_test)
+```
+## Model Building
+
+```{python, eval=FALSE, warnings=FALSE, results='hide'}
+# Build the CNN model
+model = models.Sequential([
+    layers.Input(shape=(224, 224, 3)),           # <- add this
+    layers.Conv2D(32, (3, 3), activation='relu'),
+    layers.MaxPooling2D((2, 2)),
+    layers.Conv2D(64, (3, 3), activation='relu'),
+    layers.MaxPooling2D((2, 2)),
+    layers.Flatten(),
+    layers.Dense(128, activation='relu'),
+    layers.Dropout(0.5),
+    layers.Dense(12, activation='softmax'),
+])
+
+model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
+model.summary()
+
+# Train the model
+history = model.fit(X_train, y_train, epochs=20, batch_size=2, validation_data=(X_test, y_test))
+
+y_pred = model.predict(X_test)
+
+
+```
+
+**Ergebnisse des CNN Trainings:**
+
+```{python,echo=FALSE, warnings=FALSE, results='hide'}
+
+validation = cv.imread("images/Results_validation.PNG")
+
+# Convert the image from BGR to RGB
+val_rgb = cv.cvtColor(validation, cv.COLOR_BGR2RGB)
+
+
+pred_results = cv.imread("images/pred_results.PNG")
+
+# Convert the image from BGR to RGB
+pred_rgb = cv.cvtColor(pred_results, cv.COLOR_BGR2RGB)
+```
+
+
+**Validation Training Results**
+
+```{python, echo=FALSE, warnings=FALSE, results='hide'}
+
+# Display the image using Matplotlib
+plt.imshow(val_rgb)
+plt.axis('off')  # Hide axes
+plt.show()
+```
+
+**Prediction Results**
+
+```{python, echo=FALSE, warnings=FALSE, results='hide'}
+
+# Display the image using Matplotlib
+plt.imshow(pred_rgb)
+plt.axis('off')  # Hide axes
+plt.show()
+
+```
+
+
+
+## Interpretation der Ergebnisse
+
+Die Ergebnisse mit CNNs sind nicht zufriedenstellend. Es wird etwas gelernt, aber das Ergebnis ist für das Ziel nicht brauchbar. Das liegt sehr wahrscheinlich an der Qualität der Bilder, auf denen das CNN gelernt hat. Da bei jedem Bild ein unterschiedlicher Hintergrund präsentiert wird, wird dieser für jedes Bild mit gelernt. Hier sollten die Bilder mit einem identischen Hintergrund fotografiert werden. Das gelernte Modell scheint dann aber für den praktischen Einsatz ungeeignet, da die Bilder nur mit einem einheitlichen Hintegrund gelernt werden. Das ist im Einsatz beim Schachspiel nicht praktikabel.Der Einsatz von CNN für eine einfache Kategorisierung einzelner Schachfiguten scheint, wie hier dargestellt, keine geeignete diese Aufgabe zu sein. 
+
+
+Zusätzlich war der Datensatz mit 110 Bildern insgesamt recht klein.
+
+YOLO5 und Ultralytics bieten die Möglichkeit mehrere  Objekte in einem variablen Bild identifizieren zu können.
+
+# YOLO5 und Ultralytics
+
+Mithilfe von Ultralytics lassen sich mehrere Objekte gleichzeitig in einem Bild finden und klassifizieren. Dafür müssen die Objekte in den Trainingsbildern vorher von Hand gelabeled werden. In diesem Projekt wurden die Bilder mit <https://makesense.ai>
+
+
+```{python,echo=FALSE, warnings=FALSE, results='hide'}
+
+labels = cv.imread("images/Labels_Ex.PNG")
+
+# Convert the image from BGR to RGB
+labels_rgb = cv.cvtColor(labels, cv.COLOR_BGR2RGB)
+
+
+# Display the image using Matplotlib
+plt.imshow(labels_rgb)
+plt.axis('off')  # Hide axes
+plt.show()
+
+```
+Die Bilder werden in Ultralytics (hier auf Google Colab) aufgeteilt in einen Ordner _Images_ und einen Ordner _Labels_. Der Ordern Images enthält Unterordner mit den Trainingsbilder in _train_ und den Validationbildern in _val_. In Labels werden die Labels den jeweiligen Bildern entsprechend auch unter _train_ und unter _val_ gespeichert.
+
+- Images
+  - train
+  - val
+- Labels
+  - train
+  - val
+
+
+**yaml** Datei erstellen
+
+Es muss außerdem noch eine _yaml_ Datei erstellt werden, um;
+
+- die Pfade zu den Images und den Label Ordnern zu übergen 
+- die Anzahl der Kategorien und der Kategorienauflistung mit Namen 
+
+Auf die Yaml Datei wird dann im Hauptprogramm verwiesen.
+
+
+**Code für Training**
+
+```{python,eval=FALSE,warnings=FALSE, results='hide'}
+!git clone https://github.com/ultralytics/yolov5  # Clone repository
+%cd yolov5
+!pip install -r requirements.txt  # Install dependencies
+
+from ultralytics import YOLO
+from google.colab import drive
+
+drive.mount('/content/drive')
+
+# Ein trainiertes Modell von YOLO5 laden
+# und für Transfer-Learning verwenden
+model = YOLO("yolov5s.pt")
+
+# Das Modell auf die eigenen Bilder trainieren
+# 10 epochen - mehr bringt auch nicht mehr
+# batch size 10 - bessere Übersicht
+# save_json: Ergebnisse in einer Json Datei ausgeben
+# ansonsten wird auch automatisch eine .csv Datei erstellt
+
+results = model.train(data="ChessPieces.yaml",
+                      epochs=10,
+                      imgsz = 256,
+                      batch = 10,
+                      save_json = True,
+                      lr0=0.05,
+                      augment=True,                                     
+##                      flipud=0.5,                                      
+##                      fliplr=0.5,                                      
+##                      degrees=5                                       
+##                      scale=0.1                                       
+)
+
+# check prediction of model for white rook in data set
+result = model.predict(r"images/val/whitecastle2.jpg",
+                       save=True,
+                       imgsz = 256,
+                       conf=0.45,  # Schwellenwert 1 nur Obekte mit höchster Wahrscheinlichekit über diesem Wert behalten
+                       iou=0.5,  # Schwellenwert 2 Objekte die sich mit IOU größer diesem Wert überlappen entfernen
+                       )
+```
+
+## Predict Ergebnis des einen Beispiels
+- Es wurde geprüft, ob ein weißer Turm erkannt wird. Zusätzlich gibt das System zurück, wie sicher es in seiner Kategorisierung ist, die richtige Entscheidung getroffen zu haben.
+
+```{python, echo=FALSE, eval=TRUE, warnings=FALSE, results='hide'}
+whitecastle = cv.imread("images/whitecastle2.jpg")
+
+# Convert the image from BGR to RGB
+img_rgb = cv.cvtColor(whitecastle, cv.COLOR_BGR2RGB)
+
+
+# Display the image
+plt.imshow(img_rgb)
+plt.axis('off')  # Hide axes
+plt.show()
+```
+
+## Confusion Matrix
+
+- Anzeige einer normalisierten Confusion Matrix der Ergebnisse
+- einige wenige Schachfiguren werden gut erkannt
+- andere gar nicht sicher
+
+
+```{python, echo=FALSE, warnings=FALSE, results='hide'}
+
+confusion = cv.imread("images/confusion_matrix_normalized.png")
+
+# Convert the image from BGR to RGB
+img_rgb = cv.cvtColor(confusion, cv.COLOR_BGR2RGB)
+
+
+# Display the image using Matplotlib
+plt.imshow(img_rgb)
+plt.axis('off')  # Hide axes
+plt.show()
+```
+
+## Training Pictures augmented
+
+Im Trainingsset wurden die Bilder _augmented_ also mit verschiedenen variablen Verzerrungen versehen (z.B. verschoben, gedreht)
+
+```{python, echo=FALSE, eval=TRUE, warnings=FALSE, results='hide'}
+train_batch = cv.imread("images/train_batch1.jpg")
+
+# Convert the image from BGR to RGB
+img_rgb = cv.cvtColor(train_batch, cv.COLOR_BGR2RGB)
+
+# Display the image using Matplotlib
+plt.imshow(img_rgb)
+plt.axis('off')  # Hide axes
+plt.show()
+```
+
+## Evaluation Pictures
+
+Hier ist das Ergebnis, wie die Schachfiguren in verschiedenen Bildern erkannt werden.
+
+```{python, echo=FALSE, eval=TRUE, warnings=FALSE, results='hide'}
+
+val_batch = cv.imread("images/val_batch1_pred.jpg")
+
+# Convert the image from BGR to RGB
+img_rgb_v = cv.cvtColor(val_batch, cv.COLOR_BGR2RGB)
+
+# Display the image using Matplotlib
+plt.imshow(img_rgb_v)
+plt.axis('off')  # Hide axes
+plt.show()
+```
+
+
+
+- Die Erkennung ist noch nicht besonders gut. Wahrscheinlich zu viel Rauschen durch das Fotografieren einiger Schachfiguren von oben.
+- $\rightarrow$ Bilder, die von oben fotografiert wurden, sollten erstmal nicht in das Modell einfliessen
+- Außerdem ist das aufgenommene Dataset noch immer zu klein, um zuverlässige Ergebnisse zu liefern.
+  - 120 Bilder insgesamt
+- $\rightarrow$ mit deutlich mehr Bildern trainieren, um die Variabilität von den unterschiedlichen Perspektiven auzugleichen
+
+## What next?
+- Mehr Bilder machen
+- Bilder, die von oben fotografiert sind, erstmal rausnehmen
+
+### Großes Ziel, viele Herausforderungen
+- Schachbrett separat trainieren?
+- Wie werden Positionen der Felder ermittelt?
+- Positionen der Figuren auf dem Schachbrett ermitteln
+
+### Mögliche Ideen
+- Felder auf dem gesamtes Schachbrett mit openNCV erkennen 
+- Felder benennen - Koordinaten bestimmen
+- Diese dann mit Figuren trainieren
+- Fehlende Bereiche des Schachbretts füllen - z.B. mit Generative Adversarial Networks (GANs)
+
+
+
+
+
